@@ -25,7 +25,7 @@ def get_weaviate_client():
         auth_credentials=Auth.api_key(key),
     )
 
-    for name in ["FXCodeEmbeddings", "UserCodeEmbeddings"]:
+    for name in ["FXCodeEmbeddings", "UserCodeEmbeddings", "SnippetCodeEmbeddings"]:
         if not client.collections.exists(name):
             properties = [
                 Property(name="code", data_type=DataType.TEXT, vectorizePropertyName=True)
@@ -36,6 +36,10 @@ def get_weaviate_client():
                     Property(name="file_name", data_type=DataType.TEXT, vectorizePropertyName=False),
                     Property(name="code_hash", data_type=DataType.TEXT, vectorizePropertyName=False)
                 ])
+            elif name == "SnippetCodeEmbeddings":
+                properties.append(
+                    Property(name="file_name", data_type=DataType.TEXT, vectorizePropertyName=False)
+                )
             elif name == "UserCodeEmbeddings":
                 properties.append(
                     Property(name="code_id", data_type=DataType.TEXT, vectorizePropertyName=False)
@@ -118,33 +122,57 @@ def retrieve_framework_context(client, user_vector, top_k=3):
     if not user_vector:
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
 
-    collection = client.collections.get("FXCodeEmbeddings")
-    results = collection.query.near_vector(
+    fx_collection = client.collections.get("FXCodeEmbeddings")
+    snippet_collection = client.collections.get("SnippetCodeEmbeddings")
+
+    fx_results = fx_collection.query.near_vector(
         near_vector=user_vector,
         limit=top_k,
         return_metadata=MetadataQuery(distance=True)
     )
-    return results.objects
+
+    snippet_results = snippet_collection.query.near_vector(
+        near_vector=user_vector,
+        limit=top_k,
+        return_metadata=MetadataQuery(distance=True)
+    )
+
+    # Combine results from both collections
+    combined_results = fx_results.objects + snippet_results.objects
+    return combined_results
 
 def generate_code_suggestion(user_code, user_prompt, retrieved_context):
-    snippets = "\n\n".join([
-        f"{i+1}.\n{obj.properties['code']}" for i, obj in enumerate(retrieved_context)
-    ])
+    # Extract keywords from the user prompt
+    keywords = extract_keywords(user_prompt)
+
+    # Filter the retrieved context based on keywords
+    filtered_snippets = [
+        f"{i+1}.\n{obj.properties['code']}"
+        for i, obj in enumerate(retrieved_context)
+        if any(keyword.lower() in obj.properties['code'].lower() for keyword in keywords)
+    ]
+
+    # Join the filtered snippets
+    snippets = "\n\n".join(filtered_snippets)
+
+    # Construct the prompt
     prompt = f"""
 The user has submitted this C# code:
 
 {user_code}
 
-Instruction: "{user_prompt}"
+Instruction: Please improve the code based on the following requirement: "{user_prompt}"
 
-Here are some framework references:
+Here are some relevant framework and snippet references:
 
 {snippets}
 
-Now return the improved version of the code based on internal methods. ONLY return the updated code.
+Please optimize the user's code using the above context. Focus on enhancing internal method usage and code efficiency. 
+Only return the updated C# code—no explanation or extra text.
 """
+
     response = requests.post("http://localhost:11434/api/chat", json={
-        "model": "mistral",
+        "model": "codellama",
         "messages": [
             {"role": "system", "content": "You are a C# code optimizer AI."},
             {"role": "user", "content": prompt}
@@ -156,3 +184,8 @@ Now return the improved version of the code based on internal methods. ONLY retu
         return response.json()["message"]["content"]
     else:
         raise Exception(f"Failed to generate suggestion: {response.text}")
+
+def extract_keywords(user_prompt):
+    # Simple keyword extraction logic
+    # This can be enhanced with more sophisticated NLP techniques
+    return [word.strip() for word in user_prompt.split() if len(word) > 3]
