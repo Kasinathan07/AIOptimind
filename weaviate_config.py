@@ -13,6 +13,9 @@ import json
 env_path = os.path.join(os.path.dirname(__file__), "weaviate_creds.env")
 load_dotenv(env_path)
 
+USE_MANUAL_EMBEDDING = True  # Set to False to use Weaviate's default
+
+
 def get_weaviate_client():
     url = os.getenv("WEAVIATE_URL")
     key = os.getenv("WEAVIATE_API_KEY")
@@ -25,13 +28,13 @@ def get_weaviate_client():
         auth_credentials=Auth.api_key(key),
     )
 
-    for name in ["FXCodeEmbeddings", "UserCodeEmbeddings", "SnippetCodeEmbeddings"]:
+    for name in ["FXCodeEmbedding", "UserCodeEmbeddings", "SnippetCodeEmbeddings"]:
         if not client.collections.exists(name):
             properties = [
                 Property(name="code", data_type=DataType.TEXT, vectorizePropertyName=True)
             ]
 
-            if name == "FXCodeEmbeddings":
+            if name == "FXCodeEmbedding":
                 properties.extend([
                     Property(name="file_name", data_type=DataType.TEXT, vectorizePropertyName=False),
                     Property(name="code_hash", data_type=DataType.TEXT, vectorizePropertyName=False)
@@ -54,9 +57,9 @@ def get_weaviate_client():
     return client
 
 def store_framework_embedding(client, file_name, code_str):
-    _store_embedding(client, file_name, code_str, "FXCodeEmbeddings")
+    _store_embedding(client, file_name, code_str, "FXCodeEmbedding")
 
-def store_user_embedding(client, code_str):
+# def store_user_embedding(client, code_str):
     collection = client.collections.get("UserCodeEmbeddings")
     code_id = str(uuid.uuid4())
     properties = {
@@ -68,6 +71,33 @@ def store_user_embedding(client, code_str):
     time.sleep(2)  # Allow time for vectorization
 
     # Verify vector exists using fetch_object_by_id
+    result = collection.query.fetch_object_by_id(code_id, include_vector=True)
+    if not result or not result.vector:
+        raise ValueError("❌ Vector not generated for user code")
+
+    print(f"✅ Stored user code with ID: {code_id}")
+    return code_id
+
+def store_user_embedding(client, code_str):
+    from ollama_config import get_embedding
+    collection = client.collections.get("UserCodeEmbeddings")
+    code_id = str(uuid.uuid4())
+
+    properties = {
+        "code": code_str,
+        "code_id": code_id,
+        "embedding_source": "Hugging Face" if USE_MANUAL_EMBEDDING else "weaviate"
+    }
+
+    if USE_MANUAL_EMBEDDING:
+        vector = get_embedding(code_str).tolist()
+        collection.data.insert(uuid=code_id, properties=properties, vector=vector)
+        print(f"✅inside manual embedding")
+    else:
+        collection.data.insert(uuid=code_id, properties=properties)
+        print(f"✅inside weaviate embedding")
+    time.sleep(2)  # Optional: give Weaviate time to vectorize if using automatic
+    
     result = collection.query.fetch_object_by_id(code_id, include_vector=True)
     if not result or not result.vector:
         raise ValueError("❌ Vector not generated for user code")
@@ -93,7 +123,7 @@ def get_user_vector(client, code_id):
 
     raise ValueError(f"❌ User vector still empty after retry for code ID: {code_id}")
 
-def _store_embedding(client, file_name, code_str, collection_name):
+# def _store_embedding(client, file_name, code_str, collection_name):
     collection = client.collections.get(collection_name)
     code_hash = compute_hash(code_str)
 
@@ -118,11 +148,47 @@ def _store_embedding(client, file_name, code_str, collection_name):
     collection.data.insert(properties=properties)
     print(f"✅ {file_name} stored in {collection_name}.")
 
+def _store_embedding(client, file_name, code_str, collection_name):
+    from ollama_config import get_embedding  # import here to avoid circular imports
+    collection = client.collections.get(collection_name)
+    code_hash = compute_hash(code_str)
+
+    result = collection.query.fetch_objects(
+        filters=Filter.by_property("file_name").equal(file_name)
+    )
+
+    if result.objects:
+        obj = result.objects[0]
+        if obj.properties.get("code_hash") == code_hash:
+            print(f"🟡 {file_name} unchanged. Skipping.")
+            return
+        else:
+            print(f"🟠 {file_name} changed. Updating.")
+            collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
+
+    properties = {
+        "file_name": file_name,
+        "code": code_str,
+        "code_hash": code_hash,
+        "embedding_source": "Hugging Face" if USE_MANUAL_EMBEDDING else "weaviate"
+
+    }
+
+    if USE_MANUAL_EMBEDDING:
+        vector = get_embedding(code_str).tolist()
+        collection.data.insert(properties=properties, vector=vector)
+        print(f"✅inside manual embedding")
+    else:
+        collection.data.insert(properties=properties)
+        print(f"✅inside weaviate embedding")
+
+    print(f"✅ {file_name} stored in {collection_name}.")
+
 def retrieve_framework_context(client, user_vector, top_k=3):
     if not user_vector:
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
 
-    fx_collection = client.collections.get("FXCodeEmbeddings")
+    fx_collection = client.collections.get("FXCodeEmbedding")
     snippet_collection = client.collections.get("SnippetCodeEmbeddings")
 
     fx_results = fx_collection.query.near_vector(
@@ -163,7 +229,7 @@ The user has submitted this C# code:
 
 Instruction: Please improve the code based on the following requirement: "{user_prompt}"
 
-Here are some relevant framework and snippet references:
+Here are some relevant framework keywords:
 
 {snippets}
 
@@ -172,7 +238,7 @@ Only return the updated C# code—no explanation or extra text.
 """
 
     response = requests.post("http://localhost:11434/api/chat", json={
-        "model": "codellama",
+        "model": "mistral",
         "messages": [
             {"role": "system", "content": "You are a C# code optimizer AI."},
             {"role": "user", "content": prompt}
