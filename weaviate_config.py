@@ -189,7 +189,7 @@ def retrieve_framework_context(client, user_vector, top_k=3):
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
 
     fx_collection = client.collections.get("FXCodeEmbedding")
-    snippet_collection = client.collections.get("SnippetCodeEmbeddings")
+    #snippet_collection = client.collections.get("")
 
     fx_results = fx_collection.query.near_vector(
         near_vector=user_vector,
@@ -197,14 +197,15 @@ def retrieve_framework_context(client, user_vector, top_k=3):
         return_metadata=MetadataQuery(distance=True)
     )
 
-    snippet_results = snippet_collection.query.near_vector(
-        near_vector=user_vector,
-        limit=top_k,
-        return_metadata=MetadataQuery(distance=True)
-    )
+    # snippet_results = snippet_collection.query.near_vector(
+    #     near_vector=user_vector,
+    #     limit=top_k,
+    #     return_metadata=MetadataQuery(distance=True)
+    # )
 
     # Combine results from both collections
-    combined_results = fx_results.objects + snippet_results.objects
+    combined_results = fx_results.objects 
+    #+ snippet_results.objects
     return combined_results
 
 def generate_code_suggestion(user_code, user_prompt, retrieved_context):
@@ -222,34 +223,62 @@ def generate_code_suggestion(user_code, user_prompt, retrieved_context):
     snippets = "\n\n".join(filtered_snippets)
 
     # Construct the prompt
-    prompt = f"""
-The user has submitted this C# code:
+#     prompt = f"""
+# The user has submitted this C# code:
 
-{user_code}
+# {user_code}
 
-Instruction: Please improve the code based on the following requirement: "{user_prompt}"
+# Instruction: Please improve the code based on the following requirement: "{user_prompt}"
 
-Here are some relevant framework keywords:
+# Here are some relevant framework keywords:
 
-{snippets}
+# {snippets}
 
-Please optimize the user's code using the above context. Focus on enhancing internal method usage and code efficiency. 
-Only return the updated C# code—no explanation or extra text.
-"""
+# Please optimize the user's code using the above context. Focus on enhancing internal method usage and code efficiency. 
+# Only return the updated C# code—no explanation or extra text.
+# """
 
-    response = requests.post("http://localhost:11434/api/chat", json={
-        "model": "mistral",
-        "messages": [
-            {"role": "system", "content": "You are a C# code optimizer AI."},
-            {"role": "user", "content": prompt}
-        ],
-        "stream": False
-    })
+#     response = requests.post("http://localhost:11434/api/chat", json={
+#         "model": "mistral",
+#         "messages": [
+#             {"role": "system", "content": "You are a C# code optimizer AI."},
+#             {"role": "user", "content": prompt}
+#         ],
+#         "stream": False
+#     })
 
+#     if response.status_code == 200:
+#         return response.json()["message"]["content"]
+#     else:
+#         raise Exception(f"Failed to generate suggestion: {response.text}")
+    user_message = f"""The user has submitted the following C# code with the instruction: "{user_prompt}"
+ 
+     User Code:
+     {user_code}
+ 
+     Now provide the improved or fixed version of the user code based on the framework patterns.
+     Return only the modified code.
+     """
+ 
+    payload = {
+             "model": "mistral",
+             "messages": [
+                 {
+                     "role": "system",
+                     "content": "You are an AI assistant that specializes in optimizing and debugging C# code according to internal framework patterns."
+                 },
+                 {
+                     "role": "user",
+                     "content": user_message
+                 }
+             ],
+             "stream": False
+         }
+ 
+    response = requests.post("http://localhost:11434/api/chat", json=payload)
+ 
     if response.status_code == 200:
-        return response.json()["message"]["content"]
-    else:
-        raise Exception(f"Failed to generate suggestion: {response.text}")
+             return response.json()["message"]["content"]
 
 def extract_keywords(user_prompt):
     # Simple keyword extraction logic
