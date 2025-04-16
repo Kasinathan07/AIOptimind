@@ -8,7 +8,7 @@ from weaviate.classes.query import Filter, MetadataQuery
 from weaviate.classes.config import Property, Configure, DataType
 from utils import compute_hash
 import time
-import json
+from openai import OpenAI
 
 env_path = os.path.join(os.path.dirname(__file__), "weaviate_creds.env")
 load_dotenv(env_path)
@@ -184,7 +184,7 @@ def _store_embedding(client, file_name, code_str, collection_name):
 
     print(f"✅ {file_name} stored in {collection_name}.")
 
-def retrieve_framework_context(client, user_vector, top_k=3):
+def retrieve_framework_context(client, user_vector, top_k=5):
     if not user_vector:
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
 
@@ -207,15 +207,15 @@ def retrieve_framework_context(client, user_vector, top_k=3):
     combined_results = fx_results.objects + snippet_results.objects
     return combined_results
 
-def generate_code_suggestion(user_code, user_prompt, retrieved_context):
+# def generate_code_suggestion(user_code, user_prompt, retrieved_context):
     # Extract keywords from the user prompt
-    keywords = extract_keywords(user_prompt)
+    
 
     # Filter the retrieved context based on keywords
     filtered_snippets = [
         f"{i+1}.\n{obj.properties['code']}"
         for i, obj in enumerate(retrieved_context)
-        if any(keyword.lower() in obj.properties['code'].lower() for keyword in keywords)
+        
     ]
 
     # Join the filtered snippets
@@ -251,7 +251,47 @@ Only return the updated C# code—no explanation or extra text.
     else:
         raise Exception(f"Failed to generate suggestion: {response.text}")
 
-def extract_keywords(user_prompt):
-    # Simple keyword extraction logic
-    # This can be enhanced with more sophisticated NLP techniques
-    return [word.strip() for word in user_prompt.split() if len(word) > 3]
+def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_):
+    # Extract keywords from the user prompt
+  
+ 
+    # Filter the retrieved context based on keywords
+    snippets = [
+        f"{i+1}.\n{obj.properties['code']}"
+        for i, obj in enumerate(retrievedcontext_)
+    ]
+ 
+ 
+    user_message = f"""The user has submitted the following C# code with the instruction: "{userprompt_}"
+ 
+     User Code:
+     {user_code_}
+
+     Here are some framework patterns:
+
+    {snippets}
+ 
+     Now provide the improved or fixed version of the user code based on the framework patterns.
+     Return only the modified code.
+     """
+ 
+    # Set up OpenAI API key
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ 
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",  # or any other model you prefer
+        messages=[
+            {
+                "role": "system",
+                "content": "You are an AI assistant that specializes in optimizing and debugging C# code according to internal framework patterns."
+            },
+            {
+                "role": "user",
+                "content": user_message
+            }
+        ]
+    )
+ 
+    return response.choices[0].message.content
+    
+
