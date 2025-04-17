@@ -1,84 +1,173 @@
 import gradio as gr
+import asyncio
+import warnings
+import atexit
+
 from weaviate_config import (
     get_weaviate_client, store_framework_embedding, store_user_embedding,
     retrieve_framework_context, generate_code_suggestion
 )
 from weaviate_agent import parse_csproj_and_extract_code
 
-client = get_weaviate_client()
+# Fix async loop for Windows
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
-def process_inputs(csproj_path, cs_files_str, user_code, user_prompt, add_framework, optimize_code):
-    result_log = []
-    ai_result = ""
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+client = get_weaviate_client()
+atexit.register(lambda: client.close())
+
+# === Chat Interaction Logic ===
+def chat_interaction(user_input, history, state):
+    history = history or []
+    chat_history = history.copy()
+
+    # Initialize state if needed
+    if not state or not isinstance(state, dict):
+        state = {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False}}}
+
+    if "inputs" not in state:
+        state["inputs"] = {}
+    if "flags" not in state["inputs"]:
+        state["inputs"]["flags"] = {"test": False, "optimize": False, "bug": False}
+
+    step = state["step"]
+    task = state["task"]
+
+    if step == 0:
+        if user_input.lower() in ["framework embedding", "embedding"]:
+            state["task"] = "embedding"
+            state["step"] = 1
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": "🛠 Please enter the full path to your `.csproj` file."})
+        elif user_input.lower() in ["optimize code", "optimize"]:
+            state["task"] = "optimize"
+            state["step"] = 1
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": "📝 Please paste your C# code."})
+        else:
+            chat_history.append({"role": "assistant", "content": "👋 What would you like to do?\n\n👉 Type **Framework Embedding** or **Optimize Code** to begin."})
+
+    elif task == "embedding":
+        if step == 1:
+            state["inputs"]["csproj"] = user_input
+            state["step"] = 2
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": "📄 Please enter the file names to embed (comma-separated)."})
+        elif step == 2:
+            state["inputs"]["files"] = user_input
+            chat_history.append({"role": "user", "content": user_input})
+            try:
+                csproj_path = state["inputs"]["csproj"]
+                file_names = [f.strip() for f in user_input.split(",")]
+                snippets = parse_csproj_and_extract_code(csproj_path, file_names)
+
+                if not snippets:
+                    chat_history.append({"role": "assistant", "content": "⚠️ No valid C# files found."})
+                else:
+                    for fname, code in snippets.items():
+                        store_framework_embedding(client, fname, code)
+                        chat_history.append({"role": "assistant", "content": f"✅ Stored: {fname}"})
+                chat_history.append({"role": "assistant", "content": "🎉 Done! Type another command to continue."})
+            except Exception as e:
+                chat_history.append({"role": "assistant", "content": f"❌ Error: {str(e)}"})
+            state["step"] = 0
+
+    elif task == "optimize":
+        if step == 1:
+            state["inputs"]["code"] = user_input
+            state["step"] = 2
+            chat_history.append({"role": "user", "content": f"```csharp\n{user_input}\n```"})
+            chat_history.append({"role": "assistant", "content": "☑️ What do you want to do?\n\n- Write Test Cases\n- Optimize Code\n- Find Bug"})
+            chat_history.append({"role": "assistant", "content": "__radio__"})  # Marker for frontend to show radio
+
+    return "", chat_history, state, gr.update(visible="__radio__" in [m["content"] for m in chat_history])
+
+# === Radio interaction handler ===
+def handle_radio_selection(selected_option, state, history):
+    chat_history = history or []
+    chat_history = [msg for msg in chat_history if msg["content"] != "__radio__"]
+    chat_history.append({"role": "user", "content": selected_option})
+
+    # Ensure state is properly structured
+    if not state or not isinstance(state, dict):
+        state = {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False}}}
+
+    flags = {
+        "test": "test" in selected_option.lower(),
+        "optimize": "optimize" in selected_option.lower(),
+        "bug": "bug" in selected_option.lower()
+    }
+    state["inputs"]["flags"] = flags
 
     try:
-        if add_framework:
-            target_files = [f.strip() for f in cs_files_str.split(",") if f.strip()]
-            code_snippets = parse_csproj_and_extract_code(csproj_path, target_files)
+        code = state["inputs"]["code"]
+        code_id = store_user_embedding(client, code)
+        user_obj = client.collections.get("UserCodeEmbeddings").query.fetch_object_by_id(code_id, include_vector=True)
 
-            if not code_snippets:
-                result_log.append("⚠️ No valid C# files found in the .csproj.")
-            else:
-                for file_name, code_str in code_snippets.items():
-                    store_framework_embedding(client, file_name, code_str)
-                    result_log.append(f"✅ Stored framework file: {file_name}")
+        if not hasattr(user_obj, 'vector') or user_obj.vector is None:
+            raise ValueError("❌ Vector not generated for user code")
 
-        if optimize_code:
-            code_id = store_user_embedding(client, user_code)
-            user_collection = client.collections.get("UserCodeEmbeddings")
-            user_object = user_collection.query.fetch_object_by_id(code_id, include_vector=True)
+        user_vector = user_obj.vector['default']
+        context = retrieve_framework_context(client, user_vector)
 
-            if not hasattr(user_object, 'vector') or user_object.vector is None:
-                raise ValueError("❌ Failed to generate vector for user code")
+        prompt = ""
+        if flags["test"]:
+            prompt += "Write test cases and explain them.\n"
+        if flags["optimize"]:
+            prompt += "Optimize the code and explain the changes.\n"
+        if flags["bug"]:
+            prompt += "Find bugs and explain them.\n"
 
-            user_vector = user_object.vector['default']
-            context_results = retrieve_framework_context(client, user_vector)
-            ai_result = generate_code_suggestion(user_code, user_prompt, context_results)
+        result, usage = generate_code_suggestion(code, prompt, context,state)
+        chat_history.append({"role": "assistant", "content": result})
 
-            result_log.append("✅ Optimization complete.")
-
-        if not result_log:
-            result_log.append("ℹ️ Nothing was processed. Enable one or both options.")
+        if flags["optimize"]:
+            chat_history.append({"role": "assistant", "content": "Want to optimize more precisely?"})
+        if flags["bug"]:
+            chat_history.append({"role": "assistant", "content": "Want to fix it? Or optimize it?"})
 
     except Exception as e:
-        result_log.append(f"❌ Error: {str(e)}")
+        chat_history.append({"role": "assistant", "content": f"❌ Error: {str(e)}"})
 
-    return "\n".join(result_log), ai_result
+    state["step"] = 0
+    return chat_history, state
 
+# === Gradio UI ===
+with gr.Blocks(title="AIOptimind") as demo:
+    gr.Markdown("## 🤖 AIOptimind - Chat with your Code Assistant")
 
-with gr.Blocks(title="AIOptimind Gradio Interface") as demo:
-    gr.Markdown("## 🤖 AIOptimind - Optimize your C# code with AI")
+    chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages")
+    state_box = gr.State({"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False}}})
 
-    # Checkboxes to enable sections
-    add_framework = gr.Checkbox(label="Add framework code")
-    optimize_code = gr.Checkbox(label="Optimize user C# code")
+    radio_options = gr.Radio(
+        ["Write Test Cases", "Optimize Code", "Find Bug"],
+        label=None,
+        interactive=True,
+        visible=False
+    )
 
-    # Framework section (conditionally visible)
-    with gr.Group(visible=False) as framework_section:
-        csproj_path = gr.Textbox(label="📂 .csproj File Path", placeholder="e.g. /path/to/project.csproj")
-        cs_files = gr.Textbox(label="📄 Target C# Files (comma-separated)", placeholder="e.g. Program.cs, Startup.cs")
+    with gr.Row():
+        user_input = gr.Textbox(
+            show_label=False,
+            placeholder="Type your message here...",
+            lines=1,
+            autofocus=True
+        )
 
-    # User code section (conditionally visible)
-    with gr.Group(visible=False) as user_section:
-        user_code = gr.Textbox(label="📝 Your C# Code", lines=10, placeholder="Paste your C# code here...")
-        user_prompt = gr.Textbox(label="📌 What should the AI do?", placeholder="e.g. Optimize performance")
+    user_input.submit(
+        fn=chat_interaction,
+        inputs=[user_input, chatbot, state_box],
+        outputs=[user_input, chatbot, state_box, radio_options]
+    )
 
-    # Action button
-    run_button = gr.Button("🚀 Run AIOptimind")
-
-    # Output display
-    status_output = gr.Textbox(label="🧾 Status", lines=8, interactive=False)
-    ai_output = gr.Textbox(label="💡 Optimized Code Output", lines=15, interactive=False)
-
-    # Toggle section visibility
-    add_framework.change(lambda val: gr.update(visible=val), inputs=add_framework, outputs=framework_section)
-    optimize_code.change(lambda val: gr.update(visible=val), inputs=optimize_code, outputs=user_section)
-
-    # Connect run button to logic
-    run_button.click(
-        fn=process_inputs,
-        inputs=[csproj_path, cs_files, user_code, user_prompt, add_framework, optimize_code],
-        outputs=[status_output, ai_output]
+    radio_options.change(
+        fn=handle_radio_selection,
+        inputs=[radio_options, state_box, chatbot],
+        outputs=[chatbot, state_box]
     )
 
 if __name__ == "__main__":
