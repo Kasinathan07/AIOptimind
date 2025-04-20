@@ -306,7 +306,7 @@ Only return the updated C# code—no explanation or extra text.
     
 #     return message_content, token_usage
     
-IS_OLLAMA = True  # Set to True to use Ollama (Mistral), False to use OpenAI
+IS_OLLAMA = False  # Set to True to use Ollama (Mistral), False to use OpenAI
 
 def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
     snippets = [
@@ -323,8 +323,7 @@ Here are some framework patterns:
 
 {snippets}
 
-Now provide the improved or fixed version of the user code based on the framework patterns. 
-Only return the updated C# code without any explanation or comments.
+
 """
     
     # Ensure the flags are initialized before usage
@@ -335,7 +334,7 @@ Only return the updated C# code without any explanation or comments.
     if state["inputs"]["flags"]["test"]:
         role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation or comments without C# code."
     elif state["inputs"]["flags"]["optimize"]:
-        role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code without any explanation or comments."
+        role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with any explanation or comments."
     elif state["inputs"]["flags"]["bug"]:
         role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation or comments without C# code." 
     if IS_OLLAMA:
