@@ -8,9 +8,8 @@ from weaviate.classes.query import Filter, MetadataQuery
 from weaviate.classes.config import Property, Configure, DataType
 from utils import compute_hash
 import time
-import json
-import openai
 from openai import OpenAI
+from ollama_config import get_embedding  # import here to avoid circular imports
 
 env_path = os.path.join(os.path.dirname(__file__), "weaviate_creds.env")
 load_dotenv(env_path)
@@ -59,7 +58,8 @@ def get_weaviate_client():
     return client
 
 def store_framework_embedding(client, file_name, code_str):
-    _store_embedding(client, file_name, code_str, "FXCodeEmbedding")
+    return_state = _store_embedding(client, file_name, code_str, "FXCodeEmbedding")
+    return return_state
 
 # def store_user_embedding(client, code_str):
 #     collection = client.collections.get("UserCodeEmbeddings")
@@ -80,8 +80,7 @@ def store_framework_embedding(client, file_name, code_str):
 #     print(f"✅ Stored user code with ID: {code_id}")
 #     return code_id
 
-def store_user_embedding(client, code_str):
-    from ollama_config import get_embedding
+def store_user_embedding(client, code_str):    
     collection = client.collections.get("UserCodeEmbeddings")
     code_id = str(uuid.uuid4())
 
@@ -126,32 +125,31 @@ def get_user_vector(client, code_id):
     raise ValueError(f"❌ User vector still empty after retry for code ID: {code_id}")
 
 # def _store_embedding(client, file_name, code_str, collection_name):
-    collection = client.collections.get(collection_name)
-    code_hash = compute_hash(code_str)
+#     collection = client.collections.get(collection_name)
+#     code_hash = compute_hash(code_str)
 
-    result = collection.query.fetch_objects(
-        filters=Filter.by_property("file_name").equal(file_name)
-    )
+#     result = collection.query.fetch_objects(
+#         filters=Filter.by_property("file_name").equal(file_name)
+#     )
 
-    if result.objects:
-        obj = result.objects[0]
-        if obj.properties.get("code_hash") == code_hash:
-            print(f"🟡 {file_name} unchanged. Skipping.")
-            return
-        else:
-            print(f"🟠 {file_name} changed. Updating.")
-            collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
+#     if result.objects:
+#         obj = result.objects[0]
+#         if obj.properties.get("code_hash") == code_hash:
+#             print(f"🟡 {file_name} unchanged. Skipping.")
+#             return
+#         else:
+#             print(f"🟠 {file_name} changed. Updating.")
+#             collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
 
-    properties = {
-        "file_name": file_name,
-        "code": code_str,
-        "code_hash": code_hash
-    }
-    collection.data.insert(properties=properties)
-    print(f"✅ {file_name} stored in {collection_name}.")
+#     properties = {
+#         "file_name": file_name,
+#         "code": code_str,
+#         "code_hash": code_hash
+#     }
+#     collection.data.insert(properties=properties)
+#     print(f"✅ {file_name} stored in {collection_name}.")
 
 def _store_embedding(client, file_name, code_str, collection_name):
-    from ollama_config import get_embedding  # import here to avoid circular imports
     collection = client.collections.get(collection_name)
     code_hash = compute_hash(code_str)
 
@@ -163,28 +161,31 @@ def _store_embedding(client, file_name, code_str, collection_name):
         obj = result.objects[0]
         if obj.properties.get("code_hash") == code_hash:
             print(f"🟡 {file_name} unchanged. Skipping.")
-            return
+            return "unchanged"
         else:
             print(f"🟠 {file_name} changed. Updating.")
             collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
+            result_state = "changed"
+    else:
+        result_state = "new"
 
     properties = {
         "file_name": file_name,
         "code": code_str,
         "code_hash": code_hash,
         "embedding_source": "Hugging Face" if USE_MANUAL_EMBEDDING else "weaviate"
-
     }
 
     if USE_MANUAL_EMBEDDING:
         vector = get_embedding(code_str).tolist()
         collection.data.insert(properties=properties, vector=vector)
-        print(f"✅inside manual embedding")
+        print(f"✅ inside manual embedding")
     else:
         collection.data.insert(properties=properties)
-        print(f"✅inside weaviate embedding")
+        print(f"✅ inside weaviate embedding")
 
     print(f"✅ {file_name} stored in {collection_name}.")
+    return result_state
 
 def retrieve_framework_context(client, user_vector, top_k=5):
     if not user_vector:
@@ -306,7 +307,7 @@ Only return the updated C# code—no explanation or extra text.
     
 #     return message_content, token_usage
     
-IS_OLLAMA = True  # Set to True to use Ollama (Mistral), False to use OpenAI
+IS_OLLAMA = False  # Set to True to use Ollama (Mistral), False to use OpenAI
 
 def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
     snippets = [
@@ -323,8 +324,7 @@ Here are some framework patterns:
 
 {snippets}
 
-Now provide the improved or fixed version of the user code based on the framework patterns. 
-Only return the updated C# code without any explanation or comments.
+
 """
     
     # Ensure the flags are initialized before usage
@@ -333,11 +333,11 @@ Only return the updated C# code without any explanation or comments.
 
     # Determine AI role based on selected flag
     if state["inputs"]["flags"]["test"]:
-        role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation or comments without C# code."
+        role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation."
     elif state["inputs"]["flags"]["optimize"]:
-        role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code without any explanation or comments."
+         role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation."
     elif state["inputs"]["flags"]["bug"]:
-        role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation or comments without C# code." 
+        role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." 
     if IS_OLLAMA:
         # Use Ollama (Mistral) locally
         response = requests.post("http://localhost:11434/api/chat", json={
@@ -355,7 +355,6 @@ Only return the updated C# code without any explanation or comments.
             return content, None
         else:
             raise Exception(f"Failed to generate suggestion via Ollama: {response.text}")
-
     else:
         # Use OpenAI API (GPT-4o mini)
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
