@@ -310,6 +310,7 @@ Only return the updated C# code—no explanation or extra text.
 IS_OLLAMA = False  # Set to True to use Ollama (Mistral), False to use OpenAI
 
 def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
+    Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
     snippets = [
         f"{i+1}.\n{obj.properties['code']}"
         for i, obj in enumerate(retrievedcontext_)
@@ -333,11 +334,11 @@ Here are some framework patterns:
 
     # Determine AI role based on selected flag
     if state["inputs"]["flags"]["test"]:
-        role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation."
+        role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation." + "\n" + Notes
     elif state["inputs"]["flags"]["optimize"]:
-         role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation."
+         role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
     elif state["inputs"]["flags"]["bug"]:
-        role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." 
+        role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." + "\n" + Notes
     if IS_OLLAMA:
         # Use Ollama (Mistral) locally
         response = requests.post("http://localhost:11434/api/chat", json={
