@@ -5,11 +5,12 @@ import atexit
 import warnings
 import asyncio
 import re
+import textract
 
 
 from weaviate_config import (
     get_weaviate_client, store_framework_embedding, store_user_embedding,
-    retrieve_framework_context, generate_code_suggestion
+    retrieve_framework_context, generate_code_suggestion,retrieve_Fun_framework_context,generate_FN_code_Testcase_suggestion
 )
 from weaviate_agent import parse_csproj_and_extract_code
 
@@ -37,11 +38,35 @@ def save_history(history):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f)
 
-def clear_chat():
+def clear_chat(preserve_docs=False, state=None):
     if os.path.exists(HISTORY_FILE):
         os.remove(HISTORY_FILE)
-    return [{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}], {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False}}, "last_bug_result" : None, "last_test_result": None}, gr.update(value=None,visible=True), gr.update(value=None,visible=False)
 
+    # Keep uploaded function docs if preserve_docs=True
+    if preserve_docs and state:
+        func_doc_text = state["inputs"].get("func_doc_text", None)
+    else:
+        func_doc_text = None
+    return ([{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}],{"task": None, "step": 0,"inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result": None,"last_test_result": None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": func_doc_text }},gr.update(value=None, visible=True), gr.update(value=None, visible=False),gr.update(value=None, visible=False),gr.update(value=None, visible=False))
+
+#     return (
+#     [{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}],
+#     {
+#         "task": None,
+#         "step": 0,
+#         "inputs": {
+#             "flags": {"test": False, "optimize": False, "bug": False},
+#             "last_bug_result": None,
+#             "last_test_result": None,
+#             "FnRadio": {"test": False, "generate": False, "curd": False},
+#             "func_doc_text": func_doc_text
+#         }
+#     },
+#     gr.update(value=None, visible=True),  # chat input
+#     gr.update(value=None, visible=False), # task radio
+#     gr.update(value=None, visible=False), # option radio
+#     gr.update(value=None,visible=False)  # 👈 this clears the uploaded function document(s)
+# )
 # ========== Chat Logic ==========
 def chat_interaction(user_input, history, state):
     text_Space = False
@@ -58,7 +83,7 @@ def chat_interaction(user_input, history, state):
         if user_input == None or (user_input.lower() != "Framework Embedding" and user_input.lower() !="Optimize Code") : 
             chat_history.append({"role": "user", "content": user_input})
             chat_history.append({"role": "assistant", "content": "Hi! Please select any of the options below."})
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=True,value = None)
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=True)
 
     if task == "embedding":
         if step == 1:
@@ -67,7 +92,7 @@ def chat_interaction(user_input, history, state):
             if not match:                
                 chat_history.append({"role": "user", "content": user_input})
                 chat_history.append({"role": "assistant", "content": "⚠️ Invalid path. Please enter the full path to your `.csproj` file."})                
-                return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)            
+                return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False), gr.update(visible=False)            
             csproj_path = match.group()
             state["inputs"]["csproj"] = csproj_path
             state["step"] = 2
@@ -77,11 +102,6 @@ def chat_interaction(user_input, history, state):
             show_task_radio = False
             show_option_radio = False
         elif step == 2:
-            # matches = re.findall(r'\b[A-Za-z0-9_]+\b(?:\.cs)?', user_input)
-            # if not matches:
-            #     chat_history.append({"role": "user", "content": user_input})
-            #     chat_history.append({"role": "assistant", "content": "⚠️ Invalid file names. Please enter valid C# file names."})                
-            #     return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
             state["inputs"]["files"] = user_input
             chat_history.append({"role": "user", "content": user_input})
             try:
@@ -90,10 +110,10 @@ def chat_interaction(user_input, history, state):
                 snippets = parse_csproj_and_extract_code(csproj_path, file_names)                
                 if not snippets:
                     chat_history.append({"role": "assistant", "content": "⚠️ No valid C# files found. Enter the Correct File Name."})                     
-                    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
+                    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=False)
                 else:
                     for fname, code in snippets.items():
-                        result_state = store_framework_embedding(client, fname, code)
+                        result_state = store_framework_embedding(client, fname, code, "FXCodeEmbedding")
                         if result_state == "changed":
                             chat_history.append({"role": "assistant", "content": f"✅ Stored: {fname}"})
                         elif result_state == "unchanged":
@@ -156,18 +176,18 @@ def chat_interaction(user_input, history, state):
     #show_option_radio = any(m["content"] == "__option_radio__" for m in chat_history)
     save_history(chat_history)
     #return "", chat_history, state, gr.update(visible=False), gr.update(visible=show_task_radio)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio,value = None), gr.update(visible=show_task_radio,value = None)
+    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio), gr.update(visible=show_task_radio)
 def handle_task_selection(task_choice, state, history):
     text_Space = False
     chat_history = history or []
     if not task_choice:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True,value = None), gr.update(visible=False,value = None)
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True), gr.update(visible=False)
     
     chat_history = [msg for msg in chat_history if msg["content"] != "__task_radio__"]
     chat_history.append({"role": "user", "content": task_choice})
 
     if not state or not isinstance(state, dict):
-        state = {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False}, "last_bug_result" : None, "last_test_result": None}}
+        state = {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result": None,"last_test_result": None,"FnRadio": {"test": False, "generate": False, "curd": False}, "func_doc_text": None }}
 
     if "optimize" in task_choice.lower():
         state["task"] = "optimize"
@@ -175,17 +195,21 @@ def handle_task_selection(task_choice, state, history):
         chat_history.append({"role": "assistant", "content": "📝 Please paste your C# code."})
     elif "framework" in task_choice.lower():
         state["task"] = "embedding"
-        state["step"] = 1
+        state["step"] = 1   
         chat_history.append({"role": "assistant", "content": "🛠 Please enter the full path to your `.csproj` file."})
+    elif "functiondocument" in task_choice.lower():
+        state["task"] = "function_doc"
+        state["step"] = 1
+        chat_history.append({"role": "assistant", "content": "📤 Please upload your function document."})      
 
     save_history(chat_history)
-    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
+    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False), gr.update(visible=False),gr.update(visible=(state["task"] == "function_doc"))
 
 def handle_radio_selection(selected_option, state, history):
     text_Space = False
     chat_history = [msg for msg in (history or []) if msg["content"] != "__option_radio__"]
     if not selected_option:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True,value = None), gr.update(visible=False,value = None)    
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True), gr.update(visible=False)    
     chat_history.append({"role": "user", "content": selected_option})
     Optimize_From = ""    
     if not state or not isinstance(state, dict):
@@ -256,9 +280,121 @@ def handle_radio_selection(selected_option, state, history):
     else:
         state["step"] = 0   
     save_history(chat_history)
+    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value=""),gr.update(visible = show_option_radio,value="")
 
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = ""),gr.update(visible = show_option_radio,value = "")
+def handle_func_doc_upload(file_objs, state, history):
+    text_Space = False
+    chat_history = history or []
+    result_log = []
 
+    # Check if only one file is uploaded
+    # if not file_objs or len(file_objs) != 1:
+    #     chat_history.append({"role": "assistant", "content": "❌ Please upload exactly one document at a time."})
+    #     return gr.update(interactive=text_Space, value=None), gr.update(interactive=text_Space), chat_history, state, gr.update(visible=True)
+
+    # file_obj = file_objs[0]  # Only process the first (and only) file
+    for file_obj in file_objs: # Multiple document  upload 
+        try:
+            file_path = file_obj.name
+            file_name = os.path.basename(file_path)
+
+            # Extract content using textract
+            content = textract.process(file_path).decode("utf-8")
+            state["inputs"]["func_doc_text"] = content
+
+            # Store in Weaviate
+            result_Fn = store_framework_embedding(client, file_name, content, "FunctionDocsEmbedding")
+
+            if result_Fn == "changed":
+                chat_history.append({"role": "user", "content": f"✅ Stored: {file_name}"})
+            elif result_Fn == "unchanged":
+                chat_history.append({"role": "user", "content": f"The file {file_name} is already stored."})
+
+            chat_history.append({"role": "assistant", "content": "🎉 Done! What would you like to do next?"})
+            chat_history.append({"role": "assistant", "content": "__func_doc_option_radio__"})
+
+        except Exception as e:
+            result_log.append(f"❌ Failed to embed document `{file_name}`: {str(e)}")
+            chat_history.append({"role": "assistant", "content": result_log[-1]})
+
+    state["step"] = 0
+    save_history(chat_history)
+    return gr.update(interactive=text_Space, value=None), gr.update(interactive=text_Space), chat_history, state, gr.update(visible=True,value=None)
+
+def handle_Fnradio_selection(selected_option, state, history):
+    show_task_radio = False
+    text_Space = False;
+    chat_history = [msg for msg in (history or []) if msg["content"] != "__func_doc_option_radio__"]
+    chat_history.append({"role": "user", "content": selected_option})
+
+    if not state or not isinstance(state, dict):
+        state = {"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result": None,"last_test_result": None,"FnRadio": {"test": False, "generate": False, "curd": False}, "func_doc_text": None }}
+    if not selected_option:
+        return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = None),gr.update(visible = func_doc_option_radio,value = None)
+    FnRadio = {
+        "test": "test" in selected_option.lower(),
+        "generate": "generate" in selected_option.lower(),
+        "curd": "curd" in selected_option.lower()
+    }
+    state["inputs"]["FnRadio"] = FnRadio
+
+    try:
+        func_doc_text = state["inputs"]["func_doc_text"]
+        code_id = store_user_embedding(client, func_doc_text)
+        user_obj = client.collections.get("UserCodeEmbeddings").query.fetch_object_by_id(code_id, include_vector=True)
+
+        if not hasattr(user_obj, 'vector') or user_obj.vector is None:
+            raise ValueError("❌ Vector not generated for user code")
+
+        user_vector = user_obj.vector['default']
+        context = retrieve_Fun_framework_context(client, user_vector)
+
+    
+        
+        if FnRadio["curd"]:
+            bug_prompt = "Find bugs for the code based on the internal framework patterns and explain them.\n"
+            result, _ = generate_code_suggestion(func_doc_text, bug_prompt, context, state)
+            state["inputs"]["last_bug_result"] = result
+            chat_history.append({"role": "assistant", "content": result})
+            chat_history.append({"role": "assistant", "content": "Want to fix it? Or optimize it?"})
+            state["step"] = 2
+        elif FnRadio["generate"]:
+            if "last_bug_result" in state["inputs"] and state["inputs"]["last_bug_result"]:
+                prompt = "Optimize the code based on the following bugs and return fixes for each bug:\n" + state["inputs"]["last_bug_result"]
+                result, _ = generate_code_suggestion(func_doc_text, prompt, context, state)
+                chat_history.append({"role": "assistant", "content": result})
+            elif "last_test_result" in state["inputs"] and state["inputs"]["last_test_result"]:
+                prompt = "Optimize the code based on the following test cases and return fixes for each test case:\n" + state["inputs"]["last_test_result"]
+                result, _ = generate_code_suggestion(func_doc_text, prompt, context, state)
+                chat_history.append({"role": "assistant", "content": result})
+            else:
+                chat_history.append({"role": "assistant", "content": "🔍 What exactly do you want to optimize?"})
+                state["step"] = 3
+        elif FnRadio["test"]:
+            prompt = "Write test cases for the uploaded function document based on internal functional patterns. Explain the purpose and coverage of each test case."
+            result, _ = generate_FN_code_Testcase_suggestion(func_doc_text, prompt, context, state)
+            state["inputs"]["last_test_result"] = result
+            chat_history.append({"role": "assistant", "content": result})
+
+        # result, usage = generate_code_suggestion(code, prompt, context, state)
+        # chat_history.append({"role": "assistant", "content": result})
+        #chat_history.append({"role": "assistant", "content": "🎯 Anything else?"})
+        #chat_history.append({"role": "assistant", "content": "__task_radio__"})
+        if FnRadio["test"] :
+            show_task_radio = False
+            func_doc_option_radio = True
+        elif FnRadio["generate"]:
+            show_task_radio = False
+            func_doc_option_radio = True
+        elif FnRadio["curd"]:
+            show_task_radio = False
+            func_doc_option_radio = True
+    except Exception as e:
+        chat_history.append({"role": "assistant", "content": f"❌ Error: {str(e)}"})
+
+    state["step"] = 0
+    save_history(chat_history)
+    return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = None),gr.update(visible = func_doc_option_radio,value = None)
 
 
 # ========== UI Layout ==========
@@ -276,15 +412,16 @@ with gr.Blocks(title="AIOptimind", css="""
 """)as demo:
     gr.Markdown("## 🤖 AIOptimind - Chat with your MYHUB Code Assistant")
 
-    chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history(),show_label=False)
+    chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history())
     state_box = gr.State({"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result":None ,"last_test_result":None}})
 
     #task_radio = gr.Radio(["Framework Embedding", "Optimize Code"], visible=True, label="Choose task",value=None)
     with gr.Column(visible=True, elem_id="task-radio-container") as task_container:
-        task_radio = gr.Radio(["Framework Embedding", "Optimize Code"], visible=True, label="Choose task", value=None)
+        task_radio = gr.Radio(["Framework Embedding", "Optimize Code","Functiondocument Embedding"], visible=True, label="Choose task", value=None)
 
     option_radio = gr.Radio(["Write Test Cases", "Optimize Code", "Find Bug"], visible=False, label="Choose option",value=None)
-
+    func_doc_upload = gr.File(    label="Upload Any Function Document(s)",    visible=False,    file_types=[".pdf", ".docx", ".txt", ".md", ".py", ".cs", ".json"],  file_count="multiple")
+    func_doc_option_radio = gr.Radio(["Write Test Cases", "generate Code", "CURD Operation"], visible=False, label="Choose option",value=None)
     with gr.Row():
             user_input = gr.Textbox(
                 show_label=False,
@@ -296,10 +433,18 @@ with gr.Blocks(title="AIOptimind", css="""
 
     user_input.submit(chat_interaction, [user_input, chatbot, state_box], [user_input,send_btn, chatbot, state_box, option_radio,task_radio])
     send_btn.click(chat_interaction, [user_input, chatbot, state_box], [user_input,send_btn, chatbot, state_box, option_radio,task_radio])
-    task_radio.select(handle_task_selection, [task_radio, state_box, chatbot], [user_input,send_btn, chatbot, state_box, task_radio,option_radio])    
+    task_radio.select(handle_task_selection, [task_radio, state_box, chatbot], [user_input,send_btn, chatbot, state_box, task_radio,option_radio,func_doc_upload])    
     option_radio.select(handle_radio_selection, [option_radio, state_box, chatbot], [user_input,send_btn,chatbot, state_box, task_radio,option_radio])
+    func_doc_upload.upload(handle_func_doc_upload, [func_doc_upload, state_box, chatbot], [user_input,send_btn,chatbot, state_box, func_doc_option_radio])
+    func_doc_option_radio.select(handle_Fnradio_selection, [func_doc_option_radio, state_box, chatbot], [user_input,send_btn,chatbot, state_box, task_radio,func_doc_option_radio])
 
-    gr.Button("Clear Chat", elem_id="clear-btn").click(fn=clear_chat, outputs=[chatbot, state_box, task_radio, option_radio])
+    gr.Button("Clear Chat", elem_id="clear-btn").click(
+        fn=lambda chatbot, state_box: clear_chat(preserve_docs=True, state=state_box),
+        inputs=[chatbot, state_box],
+        outputs=[chatbot, state_box, task_radio, option_radio, func_doc_option_radio,func_doc_upload]
+    )
+
+    #gr.Button("Clear Chat", elem_id="clear-btn").click(fn=clear_chat, outputs=[chatbot, state_box, task_radio, option_radio,func_doc_option_radio])
 
 if __name__ == "__main__":
     demo.launch()
