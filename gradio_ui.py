@@ -58,7 +58,7 @@ def chat_interaction(user_input, history, state):
         if user_input == None or (user_input.lower() != "Framework Embedding" and user_input.lower() !="Optimize Code") : 
             chat_history.append({"role": "user", "content": user_input})
             chat_history.append({"role": "assistant", "content": "Hi! Please select any of the options below."})
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=True)
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=True,value = None)
 
     if task == "embedding":
         if step == 1:
@@ -67,7 +67,7 @@ def chat_interaction(user_input, history, state):
             if not match:                
                 chat_history.append({"role": "user", "content": user_input})
                 chat_history.append({"role": "assistant", "content": "⚠️ Invalid path. Please enter the full path to your `.csproj` file."})                
-                return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False), gr.update(visible=False)            
+                return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)            
             csproj_path = match.group()
             state["inputs"]["csproj"] = csproj_path
             state["step"] = 2
@@ -77,6 +77,11 @@ def chat_interaction(user_input, history, state):
             show_task_radio = False
             show_option_radio = False
         elif step == 2:
+            # matches = re.findall(r'\b[A-Za-z0-9_]+\b(?:\.cs)?', user_input)
+            # if not matches:
+            #     chat_history.append({"role": "user", "content": user_input})
+            #     chat_history.append({"role": "assistant", "content": "⚠️ Invalid file names. Please enter valid C# file names."})                
+            #     return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
             state["inputs"]["files"] = user_input
             chat_history.append({"role": "user", "content": user_input})
             try:
@@ -85,7 +90,7 @@ def chat_interaction(user_input, history, state):
                 snippets = parse_csproj_and_extract_code(csproj_path, file_names)                
                 if not snippets:
                     chat_history.append({"role": "assistant", "content": "⚠️ No valid C# files found. Enter the Correct File Name."})                     
-                    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=False)
+                    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
                 else:
                     for fname, code in snippets.items():
                         result_state = store_framework_embedding(client, fname, code)
@@ -151,12 +156,12 @@ def chat_interaction(user_input, history, state):
     #show_option_radio = any(m["content"] == "__option_radio__" for m in chat_history)
     save_history(chat_history)
     #return "", chat_history, state, gr.update(visible=False), gr.update(visible=show_task_radio)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio), gr.update(visible=show_task_radio)
+    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio,value = None), gr.update(visible=show_task_radio,value = None)
 def handle_task_selection(task_choice, state, history):
     text_Space = False
     chat_history = history or []
     if not task_choice:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True), gr.update(visible=False)
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True,value = None), gr.update(visible=False,value = None)
     
     chat_history = [msg for msg in chat_history if msg["content"] != "__task_radio__"]
     chat_history.append({"role": "user", "content": task_choice})
@@ -174,13 +179,13 @@ def handle_task_selection(task_choice, state, history):
         chat_history.append({"role": "assistant", "content": "🛠 Please enter the full path to your `.csproj` file."})
 
     save_history(chat_history)
-    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False), gr.update(visible=False)
+    return gr.update(interactive = True,value = ""),gr.update(interactive = True), chat_history, state, gr.update(visible=False,value = None), gr.update(visible=False,value = None)
 
 def handle_radio_selection(selected_option, state, history):
     text_Space = False
     chat_history = [msg for msg in (history or []) if msg["content"] != "__option_radio__"]
     if not selected_option:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True), gr.update(visible=False)    
+        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True,value = None), gr.update(visible=False,value = None)    
     chat_history.append({"role": "user", "content": selected_option})
     Optimize_From = ""    
     if not state or not isinstance(state, dict):
@@ -251,7 +256,7 @@ def handle_radio_selection(selected_option, state, history):
     else:
         state["step"] = 0   
     save_history(chat_history)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio),gr.update(visible = show_option_radio)
+    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = None),gr.update(visible = show_option_radio,value = None)
 
 
 # ========== UI Layout ==========
