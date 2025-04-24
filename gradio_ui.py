@@ -256,7 +256,9 @@ def handle_radio_selection(selected_option, state, history):
     else:
         state["step"] = 0   
     save_history(chat_history)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = None),gr.update(visible = show_option_radio,value = None)
+
+    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value = ""),gr.update(visible = show_option_radio,value = "")
+
 
 
 # ========== UI Layout ==========
@@ -274,7 +276,7 @@ with gr.Blocks(title="AIOptimind", css="""
 """)as demo:
     gr.Markdown("## 🤖 AIOptimind - Chat with your MYHUB Code Assistant")
 
-    chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history())
+    chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history(),show_label=False)
     state_box = gr.State({"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result":None ,"last_test_result":None}})
 
     #task_radio = gr.Radio(["Framework Embedding", "Optimize Code"], visible=True, label="Choose task",value=None)
