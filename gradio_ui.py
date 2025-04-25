@@ -70,6 +70,8 @@ def clear_chat(preserve_docs=False, state=None):
 # ========== Chat Logic ==========
 def chat_interaction(user_input, history, state):
     text_Space = False
+    show_option_radio = False
+    show_task_radio = False
     history = history or []
     chat_history = history.copy()    
     if not state or not isinstance(state, dict):

@@ -403,9 +403,10 @@ def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
     Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
     
     snippets = [
-        f"{i+1}.\n{obj.properties['code']}"
-        for i, obj in enumerate(retrievedcontext_)
-    ]
+    f"{i+1}.\nCode:\n{obj.properties['code']}"
+    for i, obj in enumerate(retrievedcontext_)
+    if 'code' in obj.properties
+]
 
     user_message = f"""The user has submitted the following C# code with the instruction: "{userprompt_}"
 
@@ -503,7 +504,7 @@ Relevant Framework Context:
     if state["inputs"]["FnRadio"]["test"]:
         role = "You are an AI agent that specializes in writing test cases for  uploaded function document based on internal functional patterns. Only return the testcases with explanation." + "\n" + Notes
     elif state["inputs"]["FnRadio"]["generate"]:
-         role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
+         role = "You are an AI agent that specializes in generation the C# code for the functional document provided by user and based on the internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
     elif state["inputs"]["FnRadio"]["curd"]:
         role = "You are an AI agent that specializes in writing a CRUD operation in C# according to internal framework patterns. Only return the updated C# code with explanation." + "\n" + Notes
     if IS_OLLAMA:
