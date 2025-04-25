@@ -52,7 +52,8 @@ def get_weaviate_client():
                 properties=[
                     Property(name="text", data_type=DataType.TEXT, vectorizePropertyName=True),
                     Property(name="file_name", data_type=DataType.TEXT, vectorizePropertyName=False),
-                    Property(name="code_hash", data_type=DataType.TEXT, vectorizePropertyName=False)
+                    Property(name="code_hash", data_type=DataType.TEXT, vectorizePropertyName=False),
+                    Property(name="code_id", data_type=DataType.TEXT, vectorizePropertyName=False)
                 ]
 
             client.collections.create(
@@ -65,11 +66,11 @@ def get_weaviate_client():
 
 def store_framework_embedding(client, file_name, code_str, tablename):
     if tablename == "FunctionDocsEmbedding":
-        return_state = store_document_embedding(client, file_name, code_str, tablename)
-        return return_state
+        return_state,code_id = store_document_embedding(client, file_name, code_str, tablename)
+        return return_state,code_id
     else:
         return_state = _store_embedding(client, file_name, code_str,tablename)
-    return return_state
+    return return_state,None
 
 # def store_user_embedding(client, code_str):
 #     collection = client.collections.get("UserCodeEmbeddings")
@@ -218,7 +219,8 @@ def store_document_embedding(client, file_name, doc_text,tablename):
         obj = result.objects[0]
         if obj.properties.get("code_hash") == code_hash:
             print(f"🟡 {file_name} unchanged. Skipping.")
-            return "unchanged"
+            code_id = obj.properties.get("code_id")
+            return "unchanged",code_id
         else:
             print(f"🟠 {file_name} changed. Updating.")
             collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
@@ -226,23 +228,26 @@ def store_document_embedding(client, file_name, doc_text,tablename):
     else:
         result_state = "new"
 
+    code_id = str(uuid.uuid4())     
+
     properties = {
         "file_name": file_name,
         "text": doc_text,
         "code_hash": code_hash,
+        "code_id": code_id,
         "embedding_source": "Hugging Face" if USE_MANUAL_EMBEDDING else "weaviate"
     }
 
     if USE_MANUAL_EMBEDDING:    
         vector = get_embedding(doc_text).tolist()
-        collection.data.insert(properties=properties, vector=vector)
+        collection.data.insert(uuid=code_id,properties=properties, vector=vector)
         print(f"✅ Document embedding inserted manually.")
     else:
         collection.data.insert(properties=properties)
         print(f"✅ Document embedding inserted via Weaviate vectorizer.")
     
     print(f"✅ {file_name} stored in {doc_text}.")
-    return result_state
+    return result_state,code_id
 
 def retrieve_framework_context(client, user_vector, top_k=5):
     if not user_vector:
@@ -396,6 +401,7 @@ IS_OLLAMA = False  # Set to True to use Ollama (Mistral), False to use OpenAI
 
 def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
     Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
+    
     snippets = [
         f"{i+1}.\n{obj.properties['code']}"
         for i, obj in enumerate(retrievedcontext_)
@@ -418,12 +424,14 @@ Here are some framework patterns:
        state["inputs"]["flags"] = {"test": False, "optimize": False, "bug": False}
 
     # Determine AI role based on selected flag
-    if state["inputs"]["flags"]["test"]:
+    if state["inputs"]["flags"]["test"] or state["inputs"]["FnRadio"]["test"]:
         role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation." + "\n" + Notes
-    elif state["inputs"]["flags"]["optimize"]:
+    elif state["inputs"]["flags"]["optimize"]or state["inputs"]["FnRadio"]["generate"]:
          role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
     elif state["inputs"]["flags"]["bug"]:
         role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." + "\n" + Notes
+    elif state["inputs"]["FnRadio"]["curd"]:
+         role = "You are an AI agent that specializes in Writing a CRUD Operation from the Functional Documents provided by user who writes according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
     if IS_OLLAMA:
         # Use Ollama (Mistral) locally
         response = requests.post("http://localhost:11434/api/chat", json={
@@ -466,8 +474,10 @@ Here are some framework patterns:
         return message_content, token_usage
 
 def generate_FN_code_Testcase_suggestion(user_code_, userprompt_, retrievedcontext_,state):
-    Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
-       
+
+    # Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
+    Notes = "NOTE:- Focus on internal framework practices. Be clear and detailed in your suggestions."
+
 
     snippets = [
     f"{i+1}.\nCode:\n{obj.properties.get('code', '[No code available]')}\nText:\n{obj.properties.get('text', '[No text available]')}"
@@ -475,16 +485,14 @@ def generate_FN_code_Testcase_suggestion(user_code_, userprompt_, retrievedconte
     if 'code' in obj.properties or 'text' in obj.properties
 ]
 
-    user_message = f"""The user has submitted the following C# code with the instruction: "{userprompt_}"
+    user_message = f"""The user has provided the following functional document with the instruction: "{userprompt_}"
 
-User Code:
+Document Text:
 {user_code_}
 
-Here are some framework patterns:
+Relevant Framework Context:
 
 {snippets}
-
-
 """
     
     # Ensure the flags are initialized before usage
@@ -497,7 +505,7 @@ Here are some framework patterns:
     elif state["inputs"]["FnRadio"]["generate"]:
          role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
     elif state["inputs"]["FnRadio"]["curd"]:
-        role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." + "\n" + Notes
+        role = "You are an AI agent that specializes in writing a CRUD operation in C# according to internal framework patterns. Only return the updated C# code with explanation." + "\n" + Notes
     if IS_OLLAMA:
         # Use Ollama (Mistral) locally
         response = requests.post("http://localhost:11434/api/chat", json={
