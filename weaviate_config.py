@@ -10,6 +10,7 @@ from utils import compute_hash
 import time
 from openai import OpenAI
 from ollama_config import get_embedding  # import here to avoid circular imports
+from weaviate.classes.query import Filter  
 
 env_path = os.path.join(os.path.dirname(__file__), "weaviate_creds.env")
 load_dotenv(env_path)
@@ -249,33 +250,37 @@ def store_document_embedding(client, file_name, doc_text,tablename):
     print(f"✅ {file_name} stored in {doc_text}.")
     return result_state,code_id
 
-def retrieve_framework_context(client, user_vector, top_k=5):
+def retrieve_framework_context(client, user_vector,user_query_text, top_k=5):
     if not user_vector:
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
+    if not user_query_text:
+        raise ValueError("❌ Cannot retrieve context - user query text is empty")
 
     fx_collection = client.collections.get("FXCodeEmbedding")
-    snippet_collection = client.collections.get("SnippetCodeEmbeddings")
-    fun_collection = client.collections.get("FunctionDocsEmbedding")
+    
+    # fx_results = fx_collection.query.hybrid(
+    #     query=user_query_text,        # 🔥 Text-based part
+    #     vector=user_vector,           # 🔥 Vector-based part
+    #     alpha=0.5,                    # 🔥 0.5 = balance text and vector equally (you can tune this)
+    #     limit=top_k,
+    #     return_metadata=MetadataQuery(distance=True, score=True)  # Also get hybrid score if you want
+    # )
+# plain dict instead of WhereFilter
+    where_clause = {
+        "path":       ["file_name"],
+        "operator":   "Equal",
+        "valueString":"APPCrud"     # ← your user_filename
+    }
 
-    fx_results = fx_collection.query.near_vector(
-        near_vector=user_vector,
+    fx_results = fx_collection.query.hybrid(
+        query=user_query_text,
+        vector=user_vector,
+        alpha=0.5,
         limit=top_k,
-        return_metadata=MetadataQuery(distance=True)
+        where=where_clause,                            # ← simple dict!
+        return_metadata=MetadataQuery(distance=True, score=True)
     )
-
-    snippet_results = snippet_collection.query.near_vector(
-        near_vector=user_vector,
-        limit=top_k,
-        return_metadata=MetadataQuery(distance=True)
-    )
-
-    fun_results = fun_collection.query.near_vector(
-        near_vector=user_vector,
-        limit=top_k,
-        return_metadata=MetadataQuery(distance=True)
-    )
-    # Combine results from both collections
-    combined_results = fx_results.objects + snippet_results.objects + fun_results.objects
+    combined_results = fx_results.objects 
     return combined_results
 
 # def generate_code_suggestion(user_code, user_prompt, retrieved_context):
@@ -548,5 +553,42 @@ Relevant Framework Context:
         print("\nToken usage:", token_usage)
         return message_content, token_usage
 
+def SuggestFxCode_Based_on_user_input(User_Promt, retrievedcontext_):
+    # Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
+    Notes = "NOTE:- Focus on internal framework practices. Be clear and detailed in your suggestions.and return the correct framework pattern that user asked for."
+
+    snippets = [
+    f"{i+1}.\nCode:\n{obj.properties['code']}"
+    for i, obj in enumerate(retrievedcontext_)
+    if 'code' in obj.properties
+]
+    user_message = f"""The user has Requested to Get the instruction: "{User_Promt}"
+    Here are some framework patterns:
+
+{snippets}
 
 
+"""
+    role = "You are an AI agent specialized in my internal framework. Your knowledge is based entirely on the internal framework you were trained with. When suggesting code, you must only recommend solutions or code snippets that exist within the internal framework that user asked for." + "\n" + Notes
+    # Use OpenAI API (GPT-4o mini)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": role
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ]
+        )
+
+    message_content = response.choices[0].message.content
+    token_usage = response.usage
+    print("Message content:\n", message_content)
+    print("\nToken usage:", token_usage)
+    return message_content, token_usage    
