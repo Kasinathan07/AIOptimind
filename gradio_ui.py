@@ -86,7 +86,7 @@ def chat_interaction(user_input, history, state):
         if user_input == None or (user_input.lower() != "Framework Embedding" and user_input.lower() !="Optimize Code") : 
             chat_history.append({"role": "user", "content": user_input})
             chat_history.append({"role": "assistant", "content": "Hi! Please select any of the options below."})
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=True)
+        return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=True)
 
     if task == "embedding":
         if step == 1:
@@ -113,7 +113,7 @@ def chat_interaction(user_input, history, state):
                 snippets = parse_csproj_and_extract_code(csproj_path, file_names)                
                 if not snippets:
                     chat_history.append({"role": "assistant", "content": "⚠️ No valid C# files found. Enter the Correct File Name."})                     
-                    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=False)
+                    return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=False), gr.update(visible=False)
                 else:
                     for fname, code in snippets.items():
                         result_state = store_framework_embedding(client, fname, code, "FXCodeEmbedding")
@@ -220,12 +220,12 @@ def chat_interaction(user_input, history, state):
     #show_option_radio = any(m["content"] == "__option_radio__" for m in chat_history)
     save_history(chat_history)
     #return "", chat_history, state, gr.update(visible=False), gr.update(visible=show_task_radio)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio,value = None), gr.update(visible=show_task_radio,value = None)
+    return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=show_option_radio,value = None), gr.update(visible=show_task_radio,value = None)
 def handle_task_selection(task_choice, state, history):
     text_Space = False
     chat_history = history or []
     if not task_choice:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True), gr.update(visible=False)
+        return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space), chat_history, state, gr.update(visible=True), gr.update(visible=False)
     
     chat_history = [msg for msg in chat_history if msg["content"] != "__task_radio__"]
     chat_history.append({"role": "user", "content": task_choice})
@@ -257,7 +257,7 @@ def handle_radio_selection(selected_option, state, history):
     text_Space = False
     chat_history = [msg for msg in (history or []) if msg["content"] != "__option_radio__"]
     if not selected_option:
-        return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True), gr.update(visible=False)    
+        return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space),chat_history, state, gr.update(visible=True), gr.update(visible=False)    
     chat_history.append({"role": "user", "content": selected_option})
     Optimize_From = ""    
     if not state or not isinstance(state, dict):
@@ -328,7 +328,7 @@ def handle_radio_selection(selected_option, state, history):
     else:
         state["step"] = 0   
     save_history(chat_history)
-    return gr.update(interactive = text_Space,value = ""),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value=""),gr.update(visible = show_option_radio,value="")
+    return gr.update(interactive = text_Space,value = None),gr.update(interactive = text_Space),chat_history, state, gr.update(visible = show_task_radio,value=None),gr.update(visible = show_option_radio,value=None)
 
 def handle_func_doc_upload(file_objs, state, history):
     text_Space = False
@@ -522,7 +522,7 @@ with gr.Blocks(title="AIOptimind", css="""
 
         gr.Markdown("## 🤖 AIOptimind - Chat with your MYHUB Code Assistant")
 
-        chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history())
+        chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history(),show_label=False)
         state_box = gr.State({"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result":None ,"last_test_result":None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": None }})
 
         #task_radio = gr.Radio(["Framework Embedding", "Optimize Code"], visible=True, label="Choose task",value=None)
