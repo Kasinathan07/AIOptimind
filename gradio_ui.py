@@ -7,6 +7,7 @@ import asyncio
 import re
 import textract
 import requests
+from weaviate.classes.query import Filter
 
 
 from weaviate_config import (
@@ -42,13 +43,14 @@ def save_history(history):
 def clear_chat(preserve_docs=False, state=None):
     if os.path.exists(HISTORY_FILE):
         os.remove(HISTORY_FILE)
-
+    email = state.get("email") if state else None
     # Keep uploaded function docs if preserve_docs=True
     if preserve_docs and state:
         func_doc_text = state["inputs"].get("func_doc_text", None)
     else:
         func_doc_text = None
-    return ([{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}],{"task": None, "step": 0,"inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result": None,"last_test_result": None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": func_doc_text }},gr.update(value=None, visible=True), gr.update(value=None, visible=False),gr.update(value=None, visible=False),gr.update(value=None, visible=False))
+
+    return ([{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}],{"task": None, "step": 0,"email":email,"inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result": None,"last_test_result": None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": func_doc_text }},gr.update(value=None, visible=True), gr.update(value=None, visible=False),gr.update(value=None, visible=False),gr.update(value=None, visible=False))
 
 #     return (
 #     [{"role": "assistant", "content": "👋 Welcome! What would you like to do?"}],
@@ -164,7 +166,7 @@ def chat_interaction(user_input, history, state):
                 if not hasattr(userCode_obj, 'vector') or userCode_obj.vector is None:
                     raise ValueError("❌ Vector not generated for user code")
                 user_vector = userCode_obj.vector['default']
-                FXcontext = retrieve_framework_context(client, user_vector)
+                FXcontext = retrieve_framework_context(client, user_vector,user_input)
                 prompt = f"Optimize the following code with the given user input: {user_input}"
                 result, usage = generate_code_suggestion(code, prompt, FXcontext, state)
                 chat_history.append({"role": "assistant", "content": result})
@@ -273,13 +275,14 @@ def handle_radio_selection(selected_option, state, history):
         code = state["inputs"]["code"]
         code_id = store_user_embedding(client, code)
         state["inputs"]["code_id"] = code_id
-        user_obj = client.collections.get("UserCodeEmbeddings").query.fetch_object_by_id(code_id, include_vector=True)
+        if not flags["optimize"]:
+            user_obj = client.collections.get("UserCodeEmbeddings").query.fetch_object_by_id(code_id, include_vector=True)
 
-        if not hasattr(user_obj, 'vector') or user_obj.vector is None:
-            raise ValueError("❌ Vector not generated for user code")
+            if not hasattr(user_obj, 'vector') or user_obj.vector is None:
+                raise ValueError("❌ Vector not generated for user code")
 
-        user_vector = user_obj.vector['default']
-        context = retrieve_framework_context(client, user_vector)  
+            user_vector = user_obj.vector['default']
+            context = retrieve_framework_context(client, user_vector)  
         if flags["bug"]:
             bug_prompt = "Find bugs for the code based on the internal framework patterns and explain them.\n"
             result, _ = generate_code_suggestion(code, bug_prompt, context, state)
@@ -334,6 +337,8 @@ def handle_func_doc_upload(file_objs, state, history):
     text_Space = False
     chat_history = history or []
     result_log = []
+    user_email = state["email"]
+
 
     # Check if only one file is uploaded
     # if not file_objs or len(file_objs) != 1:
@@ -351,7 +356,7 @@ def handle_func_doc_upload(file_objs, state, history):
             state["inputs"]["func_doc_text"] = content
 
             # Store in Weaviate
-            result_Fn,code_id = store_framework_embedding(client, file_name, content, "FunctionDocsEmbedding")
+            result_Fn,code_id = store_framework_embedding(client, file_name, content, "FunctionDocsEmbedding",user_email)
             state["inputs"]["func_doc_code_id"] = code_id
             chat_history.append({"role": "user", "content": f"{file_name}"})
             if result_Fn == "changed":
@@ -376,6 +381,7 @@ def handle_Fnradio_selection(selected_option, state, history):
     func_doc_option_radio = False
     text_Space = False
     chat_history = [msg for msg in (history or []) if msg["content"] != "__func_doc_option_radio__"]
+    user_email = state.get("email", None)
     chat_history.append({"role": "user", "content": selected_option})
 
     if not state or not isinstance(state, dict):
@@ -406,7 +412,19 @@ def handle_Fnradio_selection(selected_option, state, history):
         code_id = state["inputs"]["func_doc_code_id"]
 
         if not FnRadio["generate"]:
-            user_obj = client.collections.get("FunctionDocsEmbedding").query.fetch_object_by_id(code_id, include_vector=True)
+            collection = client.collections.get("FunctionDocsEmbedding")
+
+            filters = (
+                Filter.by_property("code_id").equal(code_id) &
+                Filter.by_property("user_name").equal(user_email)
+            )
+
+            result = collection.query.fetch_objects(filters=filters, include_vector=True)
+
+            if not result.objects:
+                raise ValueError("❌ No matching document found for this user.")
+            user_obj = result.objects[0]
+            # user_obj = client.collections.get("FunctionDocsEmbedding").query.fetch_object_by_id(code_id, include_vector=True)
             if not hasattr(user_obj, 'vector') or user_obj.vector is None:
                 raise ValueError("❌ Vector not generated for user code")
             user_vector = user_obj.vector['default']
@@ -437,30 +455,47 @@ def handle_Fnradio_selection(selected_option, state, history):
     save_history(chat_history)
     return gr.update(interactive=text_Space, value=None), gr.update(interactive=text_Space), chat_history, state, gr.update(visible=show_task_radio, value=None), gr.update(visible=func_doc_option_radio, value=None)
 def handle_login(username, password):
-    success, message = login_user(username, password)
+    success, message, user_info = login_user(username, password)
+
     if success:
+        user_email = user_info.get("UserEmail")  # ⬅️ Get the email
         login_screen = gr.update(visible=False)
         chat_screen = gr.update(visible=True)
     else:
+        user_email=None
         login_screen = gr.update(visible=True)
         chat_screen = gr.update(visible=False)
+
     return (
         login_screen,
         chat_screen,
         gr.update(value=message, visible=True),
-        success
+        {
+        "task": None,
+        "step": 0,
+        "email": user_email,   # ✅ Email from login
+        "inputs": {
+            "flags": {"test": False, "optimize": False, "bug": False},
+            "last_bug_result": None,
+            "last_test_result": None,
+            "FnRadio": {"test": False, "generate": False, "curd": False},
+            "func_doc_text": None
+        }
+    }
     )
 def login_user(username, password):
     try:
         payload = f"grant_type=password&username={username}&password={password}&ExternalURL=dev.myhub.plus&TimeZone=-330"
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post("http://devauth.myhub.plus/token", data=payload, headers=headers)  # ✅ Correct way
+        response = requests.post("https://sitauth.myhub.plus/token", data=payload, headers=headers)  # ✅ Correct way
         if response.status_code == 200:
-            return True, "✅ Login Successful"
+            user_info = response.json()
+            return True, "✅ Login Successful",user_info
         else:
             return False, f"❌ Login Failed: {response.text}"
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
+
 
 # ========== UI Layout ==========
 with gr.Blocks(title="AIOptimind", css="""
@@ -523,7 +558,7 @@ with gr.Blocks(title="AIOptimind", css="""
         gr.Markdown("## 🤖 AIOptimind - Chat with your MYHUB Code Assistant")
 
         chatbot = gr.Chatbot(label="AI Chat", height=600, type="messages", avatar_images=("user.jpg", "chatbot.jpg"), value=load_history(),show_label=False)
-        state_box = gr.State({"task": None, "step": 0, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result":None ,"last_test_result":None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": None }})
+        state_box = gr.State({"task": None, "step": 0,"email": None, "inputs": {"flags": {"test": False, "optimize": False, "bug": False},"last_bug_result":None ,"last_test_result":None,"FnRadio": {"test": False, "generate": False, "curd": False},"func_doc_text": None }})
 
         #task_radio = gr.Radio(["Framework Embedding", "Optimize Code"], visible=True, label="Choose task",value=None)
         with gr.Column(visible=True, elem_id="task-radio-container") as task_container:
@@ -561,7 +596,7 @@ with gr.Blocks(title="AIOptimind", css="""
     login_btn.click(
         handle_login,
         inputs=[username, password],
-        outputs=[login_screen, chat_screen, login_message, is_logged_in]
+        outputs=[login_screen, chat_screen, login_message, state_box]
     )
 
 

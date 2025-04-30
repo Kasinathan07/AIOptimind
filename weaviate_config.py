@@ -10,7 +10,10 @@ from utils import compute_hash
 import time
 from openai import OpenAI
 from ollama_config import get_embedding  # import here to avoid circular imports
-from weaviate.classes.query import Filter  
+# from weaviate.classes.query import Filter  
+# from weaviate.collections.classes.filters import Filter, WhereFilter
+# from weaviate.collections.classes.filters import Filter as CollectionFilter, WhereFilter # Collection hybrid filters
+
 
 env_path = os.path.join(os.path.dirname(__file__), "weaviate_creds.env")
 load_dotenv(env_path)
@@ -54,7 +57,9 @@ def get_weaviate_client():
                     Property(name="text", data_type=DataType.TEXT, vectorizePropertyName=True),
                     Property(name="file_name", data_type=DataType.TEXT, vectorizePropertyName=False),
                     Property(name="code_hash", data_type=DataType.TEXT, vectorizePropertyName=False),
-                    Property(name="code_id", data_type=DataType.TEXT, vectorizePropertyName=False)
+                    Property(name="code_id", data_type=DataType.TEXT, vectorizePropertyName=False),
+                    Property(name="user_name", data_type=DataType.TEXT, vectorizePropertyName=False),
+
                 ]
 
             client.collections.create(
@@ -65,9 +70,9 @@ def get_weaviate_client():
 
     return client
 
-def store_framework_embedding(client, file_name, code_str, tablename):
+def store_framework_embedding(client, file_name, code_str, tablename,user_name=None):
     if tablename == "FunctionDocsEmbedding":
-        return_state,code_id = store_document_embedding(client, file_name, code_str, tablename)
+        return_state,code_id = store_document_embedding(client, file_name, code_str, tablename,user_name)
         return return_state,code_id
     else:
         return_state = _store_embedding(client, file_name, code_str,tablename)
@@ -199,7 +204,7 @@ def _store_embedding(client, file_name, code_str, collection_name):
     print(f"✅ {file_name} stored in {collection_name}.")
     return result_state
 
-def store_document_embedding(client, file_name, doc_text,tablename):
+def store_document_embedding(client, file_name, doc_text,tablename,user_name):
     """
     Stores a document embedding (e.g., PDF or DOCX converted to plain text) to the 'FunctionDocsEmbedding' collection in Weaviate.
 
@@ -212,9 +217,10 @@ def store_document_embedding(client, file_name, doc_text,tablename):
     code_hash = compute_hash(doc_text)
 
 
-    result = collection.query.fetch_objects(
-        filters=Filter.by_property("file_name").equal(file_name)
-    )
+    match_filter = Filter.by_property("file_name").equal(file_name) & Filter.by_property("user_name").equal(user_name)
+
+    result = collection.query.fetch_objects(filters=match_filter)
+
 
     if result.objects:
         obj = result.objects[0]
@@ -224,7 +230,7 @@ def store_document_embedding(client, file_name, doc_text,tablename):
             return "unchanged",code_id
         else:
             print(f"🟠 {file_name} changed. Updating.")
-            collection.data.delete_many(where=Filter.by_property("file_name").equal(file_name))
+            collection.data.delete_many(where=match_filter)
             result_state = "changed"
     else:
         result_state = "new"
@@ -236,6 +242,7 @@ def store_document_embedding(client, file_name, doc_text,tablename):
         "text": doc_text,
         "code_hash": code_hash,
         "code_id": code_id,
+        "user_name": user_name,
         "embedding_source": "Hugging Face" if USE_MANUAL_EMBEDDING else "weaviate"
     }
 
@@ -250,38 +257,61 @@ def store_document_embedding(client, file_name, doc_text,tablename):
     print(f"✅ {file_name} stored in {doc_text}.")
     return result_state,code_id
 
-def retrieve_framework_context(client, user_vector,user_query_text, top_k=5):
-    if not user_vector:
-        raise ValueError("❌ Cannot retrieve context - user vector is empty")
-    if not user_query_text:
-        raise ValueError("❌ Cannot retrieve context - user query text is empty")
+# def retrieve_framework_context(client, user_vector,user_query_text, top_k=5):
+#     if not user_vector:
+#         raise ValueError("❌ Cannot retrieve context - user vector is empty")
+#     if not user_query_text:
+#         raise ValueError("❌ Cannot retrieve context - user query text is empty")
 
-    fx_collection = client.collections.get("FXCodeEmbedding")
+#     fx_collection = client.collections.get("FXCodeEmbedding")
     
-    # fx_results = fx_collection.query.hybrid(
-    #     query=user_query_text,        # 🔥 Text-based part
-    #     vector=user_vector,           # 🔥 Vector-based part
-    #     alpha=0.5,                    # 🔥 0.5 = balance text and vector equally (you can tune this)
-    #     limit=top_k,
-    #     return_metadata=MetadataQuery(distance=True, score=True)  # Also get hybrid score if you want
-    # )
-# plain dict instead of WhereFilter
-    where_clause = {
-        "path":       ["file_name"],
-        "operator":   "Equal",
-        "valueString":"APPCrud"     # ← your user_filename
-    }
+#     # fx_results = fx_collection.query.hybrid(
+#     #     query=user_query_text,        # 🔥 Text-based part
+#     #     vector=user_vector,           # 🔥 Vector-based part
+#     #     alpha=0.5,                    # 🔥 0.5 = balance text and vector equally (you can tune this)
+#     #     limit=top_k,
+#     #     return_metadata=MetadataQuery(distance=True, score=True)  # Also get hybrid score if you want
+#     # )
+# # plain dict instead of WhereFilter
+#     # where_clause = {
+#     #     "path":       ["file_name"],
+#     #     "operator":   "Equal",
+#     #     "valueText":"APPCrud"     # ← your user_filename
+#     # }
+#     where_clause = WhereFilter(
+#     path=["file_name"],  # Name of the property
+#     operator="Equal",    # Comparison operator
+#     value_text="APPCrud" # Value for comparison (string in this case)
+# )
 
-    fx_results = fx_collection.query.hybrid(
-        query=user_query_text,
-        vector=user_vector,
-        alpha=0.5,
-        limit=top_k,
-        where=where_clause,                            # ← simple dict!
-        return_metadata=MetadataQuery(distance=True, score=True)
-    )
-    combined_results = fx_results.objects 
-    return combined_results
+#     fx_results = fx_collection.query.hybrid(
+#         query=user_query_text,
+#         vector=user_vector,
+#         alpha=0.5,
+#         limit=top_k,
+#         # where=where_clause,
+#         # filters=Filter(where=where_clause),
+#         filters=CollectionFilter(where=where_clause),          
+#         # filters=Filter(where=where_clause),                  # ← simple dict!
+#         return_metadata=MetadataQuery(distance=True, score=True)
+#     )
+#     combined_results = fx_results.objects 
+#     return combined_results
+#     fx_results = fx_collection.query.hybrid(
+#     query=user_query_text,
+#     vector=user_vector,
+#     alpha=0.5,
+#     limit=top_k,
+#     return_metadata=MetadataQuery(distance=True, score=True)
+# )
+
+#     # Manual filtering based on 'file_name'
+#     combined_results = [
+#         obj for obj in fx_results.objects
+#         if obj.properties.get('file_name') == 'APPCrud'
+#     ]
+
+#     return combined_results
 
 # def generate_code_suggestion(user_code, user_prompt, retrieved_context):
     # Extract keywords from the user prompt
@@ -327,7 +357,7 @@ Only return the updated C# code—no explanation or extra text.
     else:
         raise Exception(f"Failed to generate suggestion: {response.text}")
 
-def retrieve_Fun_framework_context(client, user_vector, top_k=5):
+def retrieve_framework_context(client, user_vector,user_prompt, top_k=5):
     if not user_vector:
         raise ValueError("❌ Cannot retrieve context - user vector is empty")
 
@@ -335,26 +365,129 @@ def retrieve_Fun_framework_context(client, user_vector, top_k=5):
     snippet_collection = client.collections.get("SnippetCodeEmbeddings")
     fun_collection = client.collections.get("FunctionDocsEmbedding")
 
+    # file_filter = Filter.by_property("file_name").equal("AppCRUD")
+    fx_results = fx_collection.query.near_vector(
+        near_vector=user_vector,
+        limit=top_k,
+        # filters=file_filter,
+        return_metadata=MetadataQuery(distance=True)
+    )
+    
+    # fx_results = fx_collection.query.hybrid(
+    #     query=user_prompt,               # 👈 use user text (e.g., "optimize exception handling")
+    #     vector=user_vector,              # 👈 use vector similarity
+    #     alpha=0.4,                       # 0.5 = balance between vector & keyword
+    #     limit=top_k,
+    #     filters=file_filter,
+    #     return_metadata=MetadataQuery(distance=True)
+    # )
+
+    # snippet_results = snippet_collection.query.near_vector(
+    #     near_vector=user_vector,
+    #     limit=top_k,
+    #     return_metadata=MetadataQuery(distance=True)
+    # )
+
+    # fun_results = fun_collection.query.near_vector(
+    #     near_vector=user_vector,
+    #     limit=top_k,
+    #     return_metadata=MetadataQuery(distance=True)
+    # )
+    # Combine results from both collections
+    combined_results = fx_results.objects 
+    return combined_results
+
+def retrieve_Fun_framework_context(client, user_vector, top_k=5):
+    if not user_vector:
+        raise ValueError("❌ Cannot retrieve context - user vector is empty")
+
+    
+    fx_collection = client.collections.get("FXCodeEmbedding")
+    snippet_collection = client.collections.get("SnippetCodeEmbeddings")
+    fun_collection = client.collections.get("FunctionDocsEmbedding")
+     # 🔥 HARD-CODED list of allowed files
+    allowed_files = ["JobHeader_Save_environment.docx","JobHeader_Save_environment1.docx"]
+
+    
+
+    # Build a dynamic filter based on file names
+    # where_clause = WhereFilter(
+    #     path=["file_name"],
+    #     operator="Or",
+    #     operands=[
+    #         WhereFilter(
+    #             path=["file_name"],
+    #             operator="Equal",
+    #             value_text=fname
+    #         ) for fname in allowed_files
+    #     ]
+    # )
+    # filters = Filter(where=where_clause)
+
+    # where_clause = {
+    #     "operator": "Or",
+    #     "operands": [
+    #         {
+    #             "path": ["file_name"],
+    #             "operator": "Equal",
+    #             "valueText": fname
+    #         }
+    #         for fname in allowed_files
+    #     ]
+    # }
+    # filters = {"where": where_clause}
+     
+    # filters = Filter.by_property("file_name").equal_any(allowed_files)
+
+    # fx_results = fx_collection.query.near_vector(
+    #     near_vector=user_vector,
+    #     limit=top_k,
+    #     return_metadata=MetadataQuery(distance=True)
+    # )
+    # filters = {
+    #     "operator": "Or",
+    #     "operands": [
+    #         {
+    #             "path": ["file_name"],
+    #             "operator": "Equal",
+    #             "valueText": fname
+    #         }
+    #         for fname in allowed_files
+    #     ]
+    # }
+        # 🔥 Create Filter correctly
+    # filters = Filter(
+    #     operator="Or",
+    #     operands=[
+    #         Filter.by_property("file_name").equal(fname) for fname in allowed_files
+    #     ]
+    # )
+    # Start with the first condition
+    file_filter = Filter.by_property("file_name").equal(allowed_files[0])
+
+    # For each additional file name, create an OR condition
+    for file in allowed_files[1:]:
+        file_filter = file_filter | Filter.by_property("file_name").equal(file)
+    
     fx_results = fx_collection.query.near_vector(
         near_vector=user_vector,
         limit=top_k,
         return_metadata=MetadataQuery(distance=True)
     )
 
-    snippet_results = snippet_collection.query.near_vector(
-        near_vector=user_vector,
-        limit=top_k,
-        return_metadata=MetadataQuery(distance=True)
-    )
+    
 
     fun_results = fun_collection.query.near_vector(
         near_vector=user_vector,
         limit=top_k,
+        #filters=Filter.by_property("file_name").equal_any(allowed_files),
+        filters=file_filter,
         return_metadata=MetadataQuery(distance=True)
     )
     # Combine results from both collections
-    combined_results = fun_results.objects +fx_results.objects + snippet_results.objects 
+    combined_results = fx_results.objects +fun_results.objects
     return combined_results
+
 
 # def generate_code_suggestion(user_code, user_prompt, retrieved_context):
     # Extract keywords from the user prompt
@@ -405,12 +538,13 @@ Only return the updated C# code—no explanation or extra text.
 IS_OLLAMA = False  # Set to True to use Ollama (Mistral), False to use OpenAI
 
 def generate_code_suggestion(user_code_, userprompt_, retrievedcontext_,state):
-    Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
+    Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'." 
+    # + "\n" + "2. If the user Prompt Prefers any kind of Transaction type. Please go on with the Internal Framework Logic since we have already predefined methods in APPCRUD.If that method is not applicable to the user case go with your suggestions";
     
     snippets = [
-    f"{i+1}.\nCode:\n{obj.properties['code']}"
-    for i, obj in enumerate(retrievedcontext_)
-    if 'code' in obj.properties
+        f"{i+1}.\nCode:\n{obj.properties['code']}"
+        for i, obj in enumerate(retrievedcontext_)
+        if 'code' in obj.properties
 ]
 
     user_message = f"""The user has submitted the following C# code with the instruction: "{userprompt_}"
@@ -433,7 +567,7 @@ Here are some framework patterns:
     if state["inputs"]["flags"]["test"] or state["inputs"]["FnRadio"]["test"]:
         role = "You are an AI agent that specializes in writing test cases for C# code according to internal framework patterns. Only return the testcases with explanation." + "\n" + Notes
     elif state["inputs"]["flags"]["optimize"]or state["inputs"]["FnRadio"]["generate"]:
-         role = "You are an AI agent that specializes in optimizing and debugging C# code according to internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes
+         role = "You are an AI agent that specializes in generating the c# code, optimizing and debugging C# code by using only our internal framework patterns.Only return the updated C# code with explanation." + "\n" + Notes 
     elif state["inputs"]["flags"]["bug"]:
         role = "You are an AI agent that specializes in identifying and fixing bugs in C# code according to internal framework patterns. Only return the bugs and explanation." + "\n" + Notes
     elif state["inputs"]["FnRadio"]["curd"]:
@@ -555,7 +689,7 @@ Relevant Framework Context:
 
 def SuggestFxCode_Based_on_user_input(User_Promt, retrievedcontext_):
     # Notes = "NOTE:- While Handling the exceptions Use the internal framework Logging Service to log exceptions instead of using 'throw new'."
-    Notes = "NOTE:- Focus on internal framework practices. Be clear and detailed in your suggestions.and return the correct framework pattern that user asked for."
+    #Notes = "NOTE:- Focus on internal framework practices. Be clear and detailed in your suggestions.and return the correct framework pattern that user asked for."
 
     snippets = [
     f"{i+1}.\nCode:\n{obj.properties['code']}"
@@ -569,7 +703,7 @@ def SuggestFxCode_Based_on_user_input(User_Promt, retrievedcontext_):
 
 
 """
-    role = "You are an AI agent specialized in my internal framework. Your knowledge is based entirely on the internal framework you were trained with. When suggesting code, you must only recommend solutions or code snippets that exist within the internal framework that user asked for." + "\n" + Notes
+    role = "You are an AI agent specialized in my internal framework. Your knowledge is based entirely on the internal framework you were trained with. you should focus only on the user question and return the exact code avaiable in the framework or Just List out the method name avaiable in the framework code which user asked for.Don't search on the entire framework code. Just target on the specific file user asked for."
     # Use OpenAI API (GPT-4o mini)
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
