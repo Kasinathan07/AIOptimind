@@ -566,7 +566,7 @@ with gr.Blocks(title="AIOptimind", css="""
 
         option_radio = gr.Radio(["Write Test Cases", "Optimize Code", "Find Bug"], visible=False, label="Choose option",value=None)
         func_doc_upload = gr.File(    label="Upload Any Function Document(s)",    visible=False,    file_types=[".pdf", ".docx", ".txt", ".md", ".py", ".cs", ".json"],  file_count="multiple")
-        func_doc_option_radio = gr.Radio(["Write Test Cases", "generate Code", "CURD Operation"], visible=False, label="Choose option",value=None)
+        func_doc_option_radio = gr.Radio(["Write Test Cases", "CRUD Operation"], visible=False, label="Choose option",value=None)
         with gr.Row():
                 user_input = gr.Textbox(
                     show_label=False,

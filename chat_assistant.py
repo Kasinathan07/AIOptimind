@@ -71,6 +71,7 @@ def login_user(username, password):
             return False, f"❌ Login Failed: {response.text}", None
     except Exception as e:
         return False, f"❌ Error: {str(e)}", None
+    
 
 def handle_login(username, password):
     success, message, user_info = login_user(username, password)
@@ -101,7 +102,7 @@ def chat_with_gpt(message, user_data):
     snippets = "\n\n".join([f"{i+1}. {obj.properties['file_name']}:\n{obj.properties['code']}" for i, obj in enumerate(fx_context_cache[:10])])
     system_prompt = (
         "You are a C# code assistant with access to the following internal framework patterns.\n\n"
-        "Use these patterns to guide your suggestions, optimizations, or bug fixes.\n\n"
+        "Use these patterns to guide the internal framework patterns as well as your suggestions, optimizations, bug fixes or testcases.\n\n"
         f"{snippets}"
     )
     messages.insert(0, {"role": "system", "content": system_prompt})
@@ -113,16 +114,17 @@ def chat_with_gpt(message, user_data):
     except Exception as e:
         reply = f"❌ Error: {e}"
 
-    text_part, code_part = process_message(message)
+    # text_part, code_part = process_message(message)
 
-    if text_part and not code_part:
-        chat_history.append({"role": "user", "content": text_part})
-    elif code_part and not text_part:
-        chat_history.append({"role": "user", "content": f"```\n{code_part}\n```"})
-    elif text_part and code_part:
-        chat_history.append({"role": "user", "content": text_part})
-        chat_history.append({"role": "user", "content": f"```\n{code_part}\n```"})
+    # if text_part and not code_part:
+    #     chat_history.append({"role": "user", "content": text_part})
+    # elif code_part and not text_part:
+    #     chat_history.append({"role": "user", "content": f"```\n{code_part}\n```"})
+    # elif text_part and code_part:
+    #     chat_history.append({"role": "user", "content": text_part})
+    #     chat_history.append({"role": "user", "content": f"```\n{code_part}\n```"})
 
+    chat_history.append({"role": "user", "content": message})
     chat_history.append({"role": "assistant", "content": reply})
     user_data["chat_history"] = chat_history
 
@@ -159,7 +161,7 @@ with gr.Blocks() as demo:
 
     with gr.Column(visible=False, elem_id="chat_screen") as chat_screen:
         gr.Markdown("## 🤖 AIOptimind - Chat with your MYHUB Code Assistant")
-        chatbot = gr.Chatbot(type="messages", height=700, show_label=False)
+        chatbot = gr.Chatbot(type="messages", height=700, show_label=False, avatar_images=("user.jpg", "chatbot.jpg"))
         with gr.Row():
             msg = gr.Textbox(show_label=False, placeholder="Type your message...", scale=10)
             send_btn = gr.Button("➤", scale=1, elem_id="send-btn")
